@@ -1,0 +1,116 @@
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Seoul \
+    PIP_NO_CACHE_DIR=1 \
+    MUJOCO_GL=egl \
+    PYOPENGL_PLATFORM=egl
+
+# 시스템 패키지 + Python 3.9 (deadsnakes PPA)
+# LOTUS README가 python=3.9.19 를 요구. Ubuntu 22.04 기본 python3은 3.10 이므로 별도 설치.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        ca-certificates \
+        gnupg \
+    && add-apt-repository -y universe \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.9 \
+        python3.9-dev \
+        python3.9-distutils \
+        python3.9-venv \
+        git \
+        wget \
+        curl \
+        sudo \
+        build-essential \
+        cmake \
+        pkg-config \
+        # ---- MuJoCo / robosuite / EGL 렌더링 의존성 ----
+        libgl1 \
+        libgl1-mesa-glx \
+        libgl1-mesa-dri \
+        libglu1-mesa \
+        libegl1 \
+        libegl1-mesa-dev \
+        libgles2-mesa-dev \
+        libosmesa6 \
+        libosmesa6-dev \
+        libglew-dev \
+        libglfw3 \
+        libglfw3-dev \
+        libglib2.0-0 \
+        libxrandr2 \
+        libxinerama1 \
+        libxcursor1 \
+        libxi6 \
+        libxxf86vm1 \
+        patchelf \
+        # ---- 기타 ----
+        ffmpeg \
+        htop \
+    && ln -sf /usr/bin/python3.9 /usr/bin/python \
+    && ln -sf /usr/bin/python3.9 /usr/bin/python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# python3.9 용 pip 설치 (apt 의 python3-pip 는 시스템 기본 python3.10 에 붙음)
+RUN wget -qO /tmp/get-pip.py https://bootstrap.pypa.io/pip/3.9/get-pip.py \
+    && python3.9 /tmp/get-pip.py \
+    && rm /tmp/get-pip.py \
+    && python3.9 -m pip install --upgrade pip setuptools wheel \
+    && ln -sf /usr/local/bin/pip3.9 /usr/local/bin/pip
+
+# PyTorch 2.0.1 + CUDA 11.8
+# README 원본은 torch 1.11.0+cu113 이지만 RTX 4070 Ti (Ada, sm_89) 미지원이라 최소 업그레이드.
+RUN python3.9 -m pip install \
+        torch==2.0.1+cu118 \
+        torchvision==0.15.2+cu118 \
+        torchaudio==2.0.2+cu118 \
+        --index-url https://download.pytorch.org/whl/cu118
+
+# LOTUS requirements.txt 내용을 그대로 반영
+# (requirements.txt 파일 자체는 빌드 컨텍스트에 없으므로 인라인으로 명시)
+RUN python3.9 -m pip install \
+        hydra-core==1.2.0 \
+        numpy==1.22.4 \
+        wandb==0.13.1 \
+        easydict==1.9 \
+        transformers==4.21.1 \
+        opencv-python==4.6.0.66 \
+        robomimic==0.2.0 \
+        einops==0.4.1 \
+        thop==0.1.1-2209072238 \
+        robosuite \
+        bddl==1.0.1 \
+        future==0.18.2 \
+        matplotlib==3.5.3 \
+        cloudpickle==2.1.0 \
+        gym==0.25.2 \
+        scikit-learn \
+        omegaconf \
+        torchmetrics==0.10.3 \
+        fvcore \
+        iopath \
+        submitit \
+        nvitop
+
+# ---- non-root 사용자 생성 (호스트 uid/gid 에 맞춤) ----
+ARG USERNAME=iw
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+RUN groupadd --gid ${USER_GID} ${USERNAME} \
+    && useradd --uid ${USER_UID} --gid ${USER_GID} -m -s /bin/bash ${USERNAME} \
+    && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
+    && chmod 0440 /etc/sudoers.d/${USERNAME}
+
+USER ${USERNAME}
+WORKDIR /home/${USERNAME}
+
+# 컨테이너 진입 후 수동으로 수행해야 할 작업:
+#   1) cd ~/lotus_test && pip install -e .
+#   2) LIBERO 설치: git clone https://github.com/Lifelong-Robot-Learning/LIBERO && cd LIBERO && pip install -e .
+#   3) python libero_benchmark_scripts/download_libero_datasets.py
+CMD ["/bin/bash"]
